@@ -337,7 +337,7 @@ def generate_flow(module_slug, ordinal):
             f.write(output)
 
     upload_yml_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
-    print("--------------done with %s-------------------------" % flow_id)
+    sys.stdout.write("%s uploaded to Dropbox.\n" % flow_id)
     return flow_id
 
 
@@ -367,7 +367,7 @@ def generate_reference_flow(course_slug, references, ordinal):
             f.write(output)
 
     upload_yml_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
-    print("--------------done with %s-------------------------" % flow_id)
+    sys.stdout.write("%s uploaded to Dropbox.\n" % flow_id)
     return flow_id
 
 
@@ -434,6 +434,17 @@ def upload_yml_to_dropbox(file_name, file_content):
     return dbx.files_upload(file_content, file_name, mode=WriteMode.overwrite)
 
 
+def tqdmWrapViewBar(*args, **kwargs):
+    from tqdm import tqdm
+    pbar = tqdm(*args, **kwargs)  # make a progressbar
+    last = [0]  # last known iteration, start at 0
+    def viewBar(a, b):
+        pbar.total = int(b)
+        pbar.update(int(a - last[0]))  # update pbar with increment
+        last[0] = a  # update last known iteration
+    return viewBar, pbar  # return callback, tqdmInstance
+
+
 def upload_resource_to_qiniu(file_path):
     if not qiniu_auth or not upload_to_qiniu:
         return
@@ -448,15 +459,18 @@ def upload_resource_to_qiniu(file_path):
     # Check if the file exists / changed, if not, upload or update.
     if ret and "hash" in ret:
         if file_etag == ret["hash"]:
-            sys.stdout.write("%s already exist." % qiniu_file_path)
+            sys.stdout.write("%s already exist.\n" % qiniu_file_path)
             return
         else:
-            sys.stdout.write("%s changed, will be overwritten." % qiniu_file_path)
+            sys.stdout.write("%s changed, will be overwritten.\n" % qiniu_file_path)
 
     size = os.stat(file_path).st_size / 1024 / 1024
-    sys.stdout.write("Uploading file with hash %s (size: %.1fM)" % (file_etag, size))
+    sys.stdout.write("Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
     token = qiniu_auth.upload_token(QINIU_BUCKET_NAME, qiniu_file_path, 3600)
-    put_file(token, qiniu_file_path, file_path)
+
+    cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
+    put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
+    pbar.close()
 
 
 def main():
