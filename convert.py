@@ -71,9 +71,13 @@ video_template = """
 
 resource_template = """
 <hr>
+
+{% raw %}{% from "macros.jinja" import downloadviewpdf %}{% endraw %}
+
 <h3>Resources</h3>
 <ul>{% for asset in assets %}
-  <li>{{ asset.asset_type }}: <a href="{{asset.url}}" target="_blank">{{asset.name}}</a></li>{% endfor %}
+  <li>{% if asset.is_pdf %}{% raw %}{{ downloadviewpdf("{% endraw %}{{asset.url}}{% raw %}", "{% endraw %}{{asset.file_name}}{% raw %}")}}{% endraw %}{% else %}
+  {{ asset.asset_type }}: <a href="{{asset.url}}" target="_blank" download="{{asset.file_name}}">{{asset.name}}</a>{% endif %}</li>{% endfor %}
 </ul>
 
 """
@@ -159,6 +163,8 @@ class CourseraItemAsset(object):
         self.url = local_path_to_url(saved_path)
         self.asset_type = asset_type
         self.name = name
+        self.is_pdf = bool(self.url.lower().endswith(".pdf"))
+        self.file_name = os.path.split(saved_path)[-1]
 
 
 class CourseraVideo(object):
