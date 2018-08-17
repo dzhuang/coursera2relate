@@ -373,7 +373,7 @@ def generate_reference_flow(course_slug, references, ordinal):
             f.write(output)
 
     upload_yml_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
-    sys.stdout.write("%s uploaded to Dropbox.\n" % flow_id)
+    sys.stdout.write("---%s uploaded to Dropbox.---\n" % flow_id)
     return flow_id
 
 
@@ -465,10 +465,11 @@ def upload_resource_to_qiniu(file_path):
     # Check if the file exists / changed, if not, upload or update.
     if ret and "hash" in ret:
         if file_etag == ret["hash"]:
-            sys.stdout.write("%s already exist.\n" % qiniu_file_path)
+            sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
             return
         else:
-            sys.stdout.write("%s changed, will be overwritten.\n" % qiniu_file_path)
+            sys.stdout.write(
+                "File with hash '%s' changed, will be overwritten.\n" % ret["hash"])
 
     size = os.stat(file_path).st_size / 1024 / 1024
     sys.stdout.write("Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
@@ -480,9 +481,10 @@ def upload_resource_to_qiniu(file_path):
 
 
 def main():
-    course_names = os.environ.get("COURSE_NAME")
+    with database:
+        courses = Course.select()
 
-    course_names_list = [c for c in course_names.split(" ") if c.strip()]
+    course_names_list = [c.course_slug for c in courses]
     for course_name in course_names_list:
         course_name = course_name.strip()
         if not course_name:
