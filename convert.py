@@ -308,6 +308,7 @@ def convert_normal_page(database, item):
         asset_tag.insert(0, NavigableString(asset_name))
 
     for asset_tag in soup.find_all(name="img"):
+        asset_tag['class'] = asset_tag.get('class', []) + ['img-responsive']
         if not asset_tag.has_attr("assetid"):
             continue
         asset_id = asset_tag["assetid"]
