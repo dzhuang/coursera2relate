@@ -307,6 +307,18 @@ def convert_normal_page(database, item):
 
         asset_tag.insert(0, NavigableString(asset_name))
 
+    for asset_tag in soup.find_all(name="img"):
+        if not asset_tag.has_attr("assetid"):
+            continue
+        asset_id = asset_tag["assetid"]
+        with database:
+            try:
+                db_asset = CourseAsset.get(asset_id=asset_id)
+            except CourseAsset.DoesNotExist:
+                continue
+        url = local_path_to_url(db_asset.saved_path)
+        asset_tag["src"] = url
+
     return soup.decode_contents()
 
 
