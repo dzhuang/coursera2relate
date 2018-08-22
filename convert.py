@@ -62,7 +62,7 @@ pages:
 """
 
 video_template = """
-<video class="video-js vjs-default-skin vjs-fluid vjs-big-play-centered" controls preload="none" data-setup='[]'>
+<video class="video-js vjs-default-skin vjs-fluid vjs-big-play-centered" controls preload="none" data-setup='[]' playsinline>
   <source src='{{ video.url }}' type='video/mp4' />
   {% for subtitle in video.subtitles %}<track kind='captions' src='{{ subtitle.url }}' srclang='{{ subtitle.lang }}' label='{{ subtitle.lang_name}}' {% if subtitle.is_default %} default {% endif %} />
   {% endfor %}
