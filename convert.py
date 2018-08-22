@@ -10,7 +10,7 @@ from coursera.models import (
 from django.conf.global_settings import LANGUAGES
 from coursera.utils import BeautifulSoup
 from bs4 import NavigableString
-from qiniu import Auth, put_file, etag, BucketManager
+from qiniu import Auth, put_file, etag, BucketManager, build_batch_stat
 
 QINIU_BUCKET_URL_PREFIX = os.environ.get("QINIU_BUCKET_URL_PREFIX", "foo")
 
@@ -194,7 +194,7 @@ def replace_ext(path, ext):
     return os.path.splitext(path)[0] + ext
 
 
-def local_path_to_url(local_path, ext=None):
+def local_path_to_url(course_slug, local_path, ext=None):
     if ext and not ext.startswith("."):
         ext = ".%s" % ext
 
@@ -209,7 +209,7 @@ def local_path_to_url(local_path, ext=None):
         striped_local_path = striped_local_path.replace("\\", "/")
     else:
         assert os.path.isfile(os.path.join(os.getcwd(), local_path))
-        upload_resource_to_qiniu(local_path)
+        upload_resource_to_qiniu(course_slug, local_path)
         striped_local_path = local_path
     return urljoin(QINIU_BUCKET_URL_PREFIX, striped_local_path)
 
@@ -217,6 +217,7 @@ def local_path_to_url(local_path, ext=None):
 def convert_video_page(database, item):
     with database:
         video_assets = ItemVideoAsset.select().join(Item).where(Item.item_id == item.item_id)
+        course_slug = video_assets.item.lesson.module.course.course_slug
 
     assert len(video_assets) <= 1
 
@@ -230,7 +231,7 @@ def convert_video_page(database, item):
     for lang in ['zh-CN', 'zh-TW', 'en']:
         if lang + ".vtt" in sub_list:
             langs.append(lang)
-            upload_resource_to_qiniu(replace_ext(video_asset.saved_path, ext=".%s.vtt" % lang))
+            upload_resource_to_qiniu(course_slug, replace_ext(video_asset.saved_path, ext=".%s.vtt" % lang))
 
     for sub in sub_list:
         lang, _ = os.path.splitext(sub)
@@ -397,6 +398,21 @@ class CourseraFlow(object):
         self.description = description
 
 
+def generate_assets_hash():
+    with database:
+        course_assets = CourseAsset.select()
+        for asset in course_assets:
+            if asset.saved_path and not asset.file_hash:
+                asset.file_hash = etag(asset.saved_path)
+                asset.save()
+
+        video_assets = ItemVideoAsset.select()
+        for asset in video_assets:
+            if asset.saved_path and not asset.file_hash:
+                asset.file_hash = etag(asset.saved_path)
+                asset.save()
+
+
 def generate_yamls(course_slug):
     with database:
         course = Course.get(course_slug=course_slug)
@@ -464,7 +480,7 @@ def tqdmWrapViewBar(*args, **kwargs):
     return viewBar, pbar  # return callback, tqdmInstance
 
 
-def upload_resource_to_qiniu(file_path):
+def upload_resource_to_qiniu(course_slug, file_path):
     if not qiniu_auth or not upload_to_qiniu:
         return
 
@@ -480,9 +496,31 @@ def upload_resource_to_qiniu(file_path):
         if file_etag == ret["hash"]:
             sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
             return
-        else:
-            sys.stdout.write(
-                "File with hash '%s' changed, will be overwritten.\n" % ret["hash"])
+
+    course_prefix = prefix + "/" + course_slug
+
+    ret, eof, info = bucket.list(bucket=QINIU_BUCKET_NAME, prefix=course_prefix)
+    for item in ret['items']:
+        if item['hash'] == file_etag:
+            sys.stdout.write("File with hash '%s' already exist (with another name).\n" % file_etag)
+            return
+
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() in [".jpg", ".png", ".gif"]:
+        basewidth = 1024
+
+        from PIL import Image
+        img = Image.open(file_path)
+        img_width, img_height = img.size
+
+        if img_width >= basewidth:
+            wpercent = (basewidth / float(img_width))
+            hsize = int((float(img_height) * float(wpercent)))
+            img = img.resize((basewidth, hsize), Image.ANTIALIAS)
+            img.save(file_path)
+
+    sys.stdout.write(
+        "File with hash '%s' changed, will be overwritten.\n" % ret["hash"])
 
     size = os.stat(file_path).st_size / 1024 / 1024
     sys.stdout.write("Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
@@ -494,6 +532,7 @@ def upload_resource_to_qiniu(file_path):
 
 
 def main():
+    generate_assets_hash()
     with database:
         courses = Course.select()
 
