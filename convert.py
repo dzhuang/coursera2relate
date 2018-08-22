@@ -159,8 +159,8 @@ class CourseraVideoSubtitle(object):
 
 
 class CourseraItemAsset(object):
-    def __init__(self, asset_type, name, saved_path):
-        self.url = local_path_to_url(saved_path)
+    def __init__(self, asset_type, name, course_slug, saved_path):
+        self.url = local_path_to_url(course_slug, saved_path)
         self.asset_type = asset_type
         self.name = name
         self.is_pdf = bool(self.url.lower().endswith(".pdf"))
@@ -209,15 +209,15 @@ def local_path_to_url(course_slug, local_path, ext=None):
         striped_local_path = striped_local_path.replace("\\", "/")
     else:
         assert os.path.isfile(os.path.join(os.getcwd(), local_path))
-        upload_resource_to_qiniu(course_slug, local_path)
-        striped_local_path = local_path
+        striped_local_path = upload_resource_to_qiniu(course_slug, local_path)
     return urljoin(QINIU_BUCKET_URL_PREFIX, striped_local_path)
 
 
 def convert_video_page(database, item):
     with database:
         video_assets = ItemVideoAsset.select().join(Item).where(Item.item_id == item.item_id)
-        course_slug = video_assets.item.lesson.module.course.course_slug
+
+    course_slug = item.lesson.module.course.course_slug
 
     assert len(video_assets) <= 1
 
@@ -225,7 +225,7 @@ def convert_video_page(database, item):
         return
 
     video_asset = video_assets[0]
-    url = local_path_to_url(video_asset.saved_path)
+    url = local_path_to_url(course_slug, video_asset.saved_path)
     sub_list = [lang.strip() for lang in video_asset.subtitles.split(",") if lang.endswith(".vtt")]
     langs = []
     for lang in ['zh-CN', 'zh-TW', 'en']:
@@ -253,7 +253,7 @@ def convert_video_page(database, item):
         for item_asset in item_assets:
             if item_asset.asset.saved_path:
                 asset = item_asset.asset
-                assets.append(CourseraItemAsset(asset.asset_type, asset.name, asset.saved_path))
+                assets.append(CourseraItemAsset(asset.asset_type, asset.name, course_slug, asset.saved_path))
 
         resource_html = template.render(assets=assets)
 
@@ -273,6 +273,12 @@ def avoid_colon_at_beginning(s):
 def convert_normal_page(database, item):
     content = avoid_colon_at_beginning(item.content)
     soup = BeautifulSoup(content)
+
+    try:
+        course_slug = item.lesson.module.course.course_slug
+    except AttributeError:
+        # reference asset
+        course_slug = item.course.course_slug
 
     # remove header tag if its content is the same with the title.
     for header_name in ["h1", "h2", "h3"]:
@@ -298,7 +304,7 @@ def convert_normal_page(database, item):
                 db_asset = CourseAsset.get(asset_id=asset_id)
             except CourseAsset.DoesNotExist:
                 continue
-        url = local_path_to_url(db_asset.saved_path)
+        url = local_path_to_url(course_slug, db_asset.saved_path)
         asset_tag["href"] = url
         asset_tag["target"] = "_blank"
 
@@ -318,7 +324,7 @@ def convert_normal_page(database, item):
                 db_asset = CourseAsset.get(asset_id=asset_id)
             except CourseAsset.DoesNotExist:
                 continue
-        url = local_path_to_url(db_asset.saved_path)
+        url = local_path_to_url(course_slug, db_asset.saved_path)
         asset_tag["src"] = url
 
     return soup.decode_contents()
@@ -484,6 +490,20 @@ def upload_resource_to_qiniu(course_slug, file_path):
     if not qiniu_auth or not upload_to_qiniu:
         return
 
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() in [".jpg", ".png", ".gif"]:
+        basewidth = 1024
+
+        from PIL import Image
+        img = Image.open(file_path)
+        img_width, img_height = img.size
+
+        if img_width > basewidth:
+            wpercent = (basewidth / float(img_width))
+            hsize = int((float(img_height) * float(wpercent)))
+            img = img.resize((basewidth, hsize), Image.ANTIALIAS)
+            img.save(file_path)
+
     prefix = "coursera-videos"
     qiniu_file_path = os.path.join(prefix, file_path)
 
@@ -495,7 +515,7 @@ def upload_resource_to_qiniu(course_slug, file_path):
     if ret and "hash" in ret:
         if file_etag == ret["hash"]:
             sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
-            return
+            return qiniu_file_path
 
     course_prefix = prefix + "/" + course_slug
 
@@ -503,32 +523,20 @@ def upload_resource_to_qiniu(course_slug, file_path):
     for item in ret['items']:
         if item['hash'] == file_etag:
             sys.stdout.write("File with hash '%s' already exist (with another name).\n" % file_etag)
-            return
-
-    _, ext = os.path.splitext(file_path)
-    if ext.lower() in [".jpg", ".png", ".gif"]:
-        basewidth = 1024
-
-        from PIL import Image
-        img = Image.open(file_path)
-        img_width, img_height = img.size
-
-        if img_width >= basewidth:
-            wpercent = (basewidth / float(img_width))
-            hsize = int((float(img_height) * float(wpercent)))
-            img = img.resize((basewidth, hsize), Image.ANTIALIAS)
-            img.save(file_path)
+            return item['key']
 
     sys.stdout.write(
-        "File with hash '%s' changed, will be overwritten.\n" % ret["hash"])
+        "File with hash '%s' changed, will be overwritten.\n" % file_etag)
 
     size = os.stat(file_path).st_size / 1024 / 1024
     sys.stdout.write("Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
     token = qiniu_auth.upload_token(QINIU_BUCKET_NAME, qiniu_file_path, 3600)
 
     cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
-    put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
+    ret, _ = put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
+
     pbar.close()
+    return ret['key']
 
 
 def main():

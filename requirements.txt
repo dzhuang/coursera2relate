@@ -13,3 +13,4 @@ dropbox
 qiniu
 git+https://github.com/dzhuang/coursera-dl.git@sqlite
 tqdm
+Pillow
