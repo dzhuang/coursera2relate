@@ -16,7 +16,7 @@ script:
         line=$(echo $line|tr -d '\r')
 
         # skip comments
-        if [[ $line != "#"* ]]; then
+        if [[ $line != "#"* ]] && [[ $line != "" ]]; then
           coursera-dl -u "$USERNAME" -p "$PASSWORD" "$line" > log.txt
         fi
     done < list.txt
