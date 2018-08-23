@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import datetime
 import sys
 import jinja2
 import re
@@ -16,7 +17,9 @@ QINIU_BUCKET_URL_PREFIX = os.environ.get("QINIU_BUCKET_URL_PREFIX", "foo")
 
 LOCAL_PATH_PREFIX = os.getcwd()
 
-database = SqliteDatabase(os.path.join(LOCAL_PATH_PREFIX, "coursera-dl.db"))
+DB_PATH = os.path.join(LOCAL_PATH_PREFIX, "coursera-dl.db")
+
+database = SqliteDatabase(DB_PATH)
 
 upload_to_qiniu = False
 QINIU_ACCESS_KEY = os.environ.get("QINIU_ACCESS_KEY", "")
@@ -365,7 +368,7 @@ def generate_flow(module_slug, ordinal):
         with open(file_name, "w", encoding="utf-8") as f:
             f.write(output)
 
-    upload_yml_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
+    upload_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
     sys.stdout.write("%s uploaded to Dropbox.\n" % flow_id)
     return flow_id
 
@@ -395,7 +398,7 @@ def generate_reference_flow(course_slug, references, ordinal):
         with open(file_name, "w", encoding="utf-8") as f:
             f.write(output)
 
-    upload_yml_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
+    upload_to_dropbox("/" + os.path.join(course_slug, "flows", yaml_path), output.encode())
     sys.stdout.write("---%s uploaded to Dropbox.---\n" % flow_id)
     return flow_id
 
@@ -435,7 +438,7 @@ def generate_yamls(course_slug):
                 return
 
         dropbox_path = "/" + os.path.join(course_slug, yaml_path)
-        upload_yml_to_dropbox(dropbox_path, output.encode())
+        upload_to_dropbox(dropbox_path, output.encode())
 
     # for embedded chunk
     yaml_path = "%s_course_chunks.yml" % course_slug.replace("_", "-")
@@ -450,7 +453,7 @@ def generate_yamls(course_slug):
     sys.stdout.write("--------------Done!-----------------\n")
 
 
-def upload_yml_to_dropbox(file_name, file_content):
+def upload_to_dropbox(file_name, file_content):
     if sys.platform.startswith("win"):
         return
     dropbox_token = os.environ.get("DROPBOX_ACCESS_TOKEN", "")
@@ -563,6 +566,11 @@ def remove_specific_files(course_slug, extension=".pdf"):
 
 
 def main():
+    if os.path.isfile(DB_PATH):
+        with open(DB_PATH, 'rb') as f:
+            data = f.read()
+            upload_to_dropbox("/course_%s.db" % datetime.datetime.now().strftime("%Y-%m-%d-%H-%M"), data)
+
     try:
         with database:
             courses = Course.select()
