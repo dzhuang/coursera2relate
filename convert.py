@@ -337,7 +337,7 @@ def convert_normal_page(database, item):
         url = local_path_to_url(course_slug, db_asset.saved_path)
         asset_tag["src"] = url
 
-    return html.unescape(soup.decode_contents())
+    return html.unescape(soup.decode_contents()).replace("$$", "$")
 
 
 def generate_flow(module_slug, ordinal):
