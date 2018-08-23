@@ -4,7 +4,7 @@ import os
 import sys
 import jinja2
 import re
-from peewee import SqliteDatabase
+from peewee import SqliteDatabase, OperationalError
 from coursera.models import (
     Module, Lesson, Item, ItemVideoAsset, ItemAsset, Reference, CourseAsset, Course)
 from django.conf.global_settings import LANGUAGES
@@ -563,16 +563,24 @@ def remove_specific_files(course_slug, extension=".pdf"):
 
 
 def main():
-    with database:
-        courses = Course.select()
+    try:
+        with database:
+            courses = Course.select()
 
-    course_slug_list = [c.course_slug for c in courses]
-    for course_slug in course_slug_list:
-        # remove_duplicate_files(course_slug)
-        # remove_specific_files(course_slug)
-        # remove_specific_files(course_slug, extension=".jpg")
-        # remove_specific_files(course_slug, extension=".png")
-        generate_yamls(course_slug)
+        course_slug_list = [c.course_slug for c in courses]
+        for course_slug in course_slug_list:
+            # remove_duplicate_files(course_slug)
+            # remove_specific_files(course_slug)
+            # remove_specific_files(course_slug, extension=".jpg")
+            # remove_specific_files(course_slug, extension=".png")
+            generate_yamls(course_slug)
+
+    except OperationalError as e:
+        if "no such table" in str(e):
+            sys.stdout.write("Warning: No Course has been downloaded.")
+            sys.exit(1)
+        else:
+            raise e
 
 
 if __name__ == "__main__":
