@@ -8,6 +8,7 @@ install:
 
 script:
   - wget "$LIST_URL" -O list.txt -q
+  - wget "$CONF" -O coursera-dl.conf -q
   - touch log.txt
   - |
     while IFS='' read -r line || [[ -n "$line" ]]; do
@@ -17,7 +18,7 @@ script:
 
         # skip comments
         if [[ $line != "#"* ]] && [[ $line != "" ]]; then
-          coursera-dl -u "$USERNAME" -p "$PASSWORD" "$line" > log.txt
+          coursera-dl "$line" > log.txt
         fi
     done < list.txt
   - python convert.py

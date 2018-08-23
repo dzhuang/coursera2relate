@@ -13,6 +13,9 @@ from coursera.utils import BeautifulSoup
 from bs4 import NavigableString
 from qiniu import Auth, put_file, etag, BucketManager
 
+sys.stdout = sys.__stdout__
+sys.stderr = sys.__stderr__
+
 QINIU_BUCKET_URL_PREFIX = os.environ.get("QINIU_BUCKET_URL_PREFIX", "foo")
 
 LOCAL_PATH_PREFIX = os.getcwd()
