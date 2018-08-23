@@ -12,6 +12,7 @@ from django.conf.global_settings import LANGUAGES
 from coursera.utils import BeautifulSoup
 from bs4 import NavigableString
 from qiniu import Auth, put_file, etag, BucketManager
+import html
 
 sys.stdout = sys.__stdout__
 sys.stderr = sys.__stderr__
@@ -336,7 +337,7 @@ def convert_normal_page(database, item):
         url = local_path_to_url(course_slug, db_asset.saved_path)
         asset_tag["src"] = url
 
-    return soup.decode_contents()
+    return html.unescape(soup.decode_contents())
 
 
 def generate_flow(module_slug, ordinal):
