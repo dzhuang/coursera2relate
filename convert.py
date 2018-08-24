@@ -17,8 +17,6 @@ import html
 sys.stdout = sys.__stdout__
 sys.stderr = sys.__stderr__
 
-QINIU_BUCKET_URL_PREFIX = os.environ.get("QINIU_BUCKET_URL_PREFIX", "foo")
-
 LOCAL_PATH_PREFIX = os.getcwd()
 
 DB_PATH = os.path.join(LOCAL_PATH_PREFIX, "coursera-dl.db")
@@ -73,8 +71,8 @@ pages:
 
 video_template = """
 <video class="video-js vjs-default-skin vjs-fluid vjs-big-play-centered" controls preload="none" data-setup='[]' playsinline>
-  <source src='{{ video.url }}' type='video/mp4' />
-  {% for subtitle in video.subtitles %}<track kind='captions' src='{{ subtitle.url }}' srclang='{{ subtitle.lang }}' label='{{ subtitle.lang_name}}' {% if subtitle.is_default %} default {% endif %} />
+  <source src='mooc:{{ video.url }}' type='video/mp4' />
+  {% for subtitle in video.subtitles %}<track kind='captions' src='mooc:{{ subtitle.url }}' srclang='{{ subtitle.lang }}' label='{{ subtitle.lang_name}}' {% if subtitle.is_default %} default {% endif %} />
   {% endfor %}
 </video>
 """
@@ -87,7 +85,7 @@ resource_template = """
 <h3>Resources</h3>
 <ul>{% for asset in assets %}
   <li>{% if asset.is_pdf %}{% raw %}{{ downloadviewpdf("{% endraw %}{{asset.url}}{% raw %}", "{% endraw %}{{asset.file_name}}{% raw %}")}}{% endraw %}{% else %}
-  {{ asset.asset_type }}: <a href="{{asset.url}}" target="_blank" download="{{asset.file_name}}">{{asset.name}}</a>{% endif %}</li>{% endfor %}
+  {{ asset.asset_type }}: <a href="mooc:{{asset.url}}" target="_blank" download="{{asset.file_name}}">{{asset.name}}</a>{% endif %}</li>{% endfor %}
 </ul>
 
 """
@@ -211,7 +209,6 @@ def local_path_to_url(course_slug, local_path, ext=None):
     if ext:
         local_path = os.path.splitext(local_path)[0] + ext
 
-    from six.moves.urllib.parse import urljoin
     if sys.platform.startswith("win"):
         assert local_path.startswith(LOCAL_PATH_PREFIX), local_path
 
@@ -220,7 +217,8 @@ def local_path_to_url(course_slug, local_path, ext=None):
     else:
         assert os.path.isfile(os.path.join(os.getcwd(), local_path))
         striped_local_path = upload_resource_to_qiniu(course_slug, local_path)
-    return urljoin(QINIU_BUCKET_URL_PREFIX, striped_local_path)
+    assert not striped_local_path.startswith("/")
+    return striped_local_path
 
 
 def convert_video_page(database, item):
