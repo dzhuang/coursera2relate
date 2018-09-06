@@ -27,13 +27,14 @@ upload_to_qiniu = False
 QINIU_ACCESS_KEY = os.environ.get("QINIU_ACCESS_KEY", "")
 QINIU_SECRET_KEY = os.environ.get("QINIU_SECRET_KEY", "")
 QINIU_BUCKET_NAME = os.environ.get("QINIU_BUCKET_NAME", "")
+QINIU_VIDEO_BUCKET_NAME = os.environ.get("QINIU_VIDEO_BUCKET_NAME", "")
 IN_BUCKET_PREFIX = "coursera-videos"
 
 qiniu_auth = None
 bucket = None
 
 if (not sys.platform.startswith("win")
-        and QINIU_ACCESS_KEY and QINIU_SECRET_KEY and QINIU_BUCKET_NAME):
+        and QINIU_ACCESS_KEY and QINIU_SECRET_KEY and QINIU_BUCKET_NAME and QINIU_VIDEO_BUCKET_NAME):
     upload_to_qiniu = True
     qiniu_auth = Auth(QINIU_ACCESS_KEY, QINIU_SECRET_KEY)
     bucket = BucketManager(qiniu_auth)
@@ -479,10 +480,45 @@ def tqdmWrapViewBar(*args, **kwargs):
     return viewBar, pbar  # return callback, tqdmInstance
 
 
-def get_bucket_course_files(course_slug):
+def get_bucket_course_files(course_slug, bucket_name):
     course_prefix = "%s/%s" % (IN_BUCKET_PREFIX, course_slug)
-    ret, _, _ = bucket.list(bucket=QINIU_BUCKET_NAME, prefix=course_prefix)
+    ret, _, _ = bucket.list(bucket=bucket_name, prefix=course_prefix)
     return ret['items']
+
+
+def _upload(course_slug, bucket_name, file_path):
+    qiniu_file_path = os.path.join(IN_BUCKET_PREFIX, file_path)
+
+    file_etag = etag(file_path)
+    ret, _ = bucket.stat(bucket_name, qiniu_file_path)
+
+    # Check if the file exists / changed, if not, upload or update.
+    if ret and "hash" in ret:
+        if file_etag == ret["hash"]:
+            sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
+            return qiniu_file_path
+
+    bucket_course_files = get_bucket_course_files(course_slug, bucket_name)
+    for item in bucket_course_files:
+        if item['hash'] == file_etag:
+            sys.stdout.write(
+                "File with hash '%s' already exist (with another name).\n"
+                % file_etag)
+            return item['key']
+
+    sys.stdout.write(
+        "File with hash '%s' changed, will be overwritten.\n" % file_etag)
+
+    size = os.stat(file_path).st_size / 1024 / 1024
+    sys.stdout.write(
+        "Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
+    token = qiniu_auth.upload_token(bucket_name, qiniu_file_path, 3600)
+
+    cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
+    ret, _ = put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
+
+    pbar.close()
+    return ret['key']
 
 
 def upload_resource_to_qiniu(course_slug, file_path):
@@ -503,47 +539,19 @@ def upload_resource_to_qiniu(course_slug, file_path):
             img = img.resize((basewidth, hsize), Image.ANTIALIAS)
             img.save(file_path)
 
-    qiniu_file_path = os.path.join(IN_BUCKET_PREFIX, file_path)
-
-    file_etag = etag(file_path)
-    ret, _ = bucket.stat(QINIU_BUCKET_NAME, qiniu_file_path)
-
-    # Check if the file exists / changed, if not, upload or update.
-    if ret and "hash" in ret:
-        if file_etag == ret["hash"]:
-            sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
-            return qiniu_file_path
-
-    bucket_course_files = get_bucket_course_files(course_slug)
-    for item in bucket_course_files:
-        if item['hash'] == file_etag:
-            sys.stdout.write(
-                "File with hash '%s' already exist (with another name).\n"
-                % file_etag)
-            return item['key']
-
-    sys.stdout.write(
-        "File with hash '%s' changed, will be overwritten.\n" % file_etag)
-
-    size = os.stat(file_path).st_size / 1024 / 1024
-    sys.stdout.write(
-        "Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
-    token = qiniu_auth.upload_token(QINIU_BUCKET_NAME, qiniu_file_path, 3600)
-
-    cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
-    ret, _ = put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
-
-    pbar.close()
-    return ret['key']
+    if file_path.lower().endswith("mp4"):
+        return _upload(course_slug, QINIU_VIDEO_BUCKET_NAME, file_path)
+    else:
+        return _upload(course_slug, QINIU_BUCKET_NAME, file_path)
 
 
-def remove_duplicate_files(course_slug):
-    course_files = get_bucket_course_files(course_slug)
+def remove_duplicate_files(course_slug, bucket_name):
+    course_files = get_bucket_course_files(course_slug, bucket_name)
     exist_hashes = []
     n_deleted_file = 0
     for course_file in course_files:
         if course_file["hash"] in exist_hashes:
-            bucket.delete(QINIU_BUCKET_NAME, course_file["key"])
+            bucket.delete(bucket_name, course_file["key"])
             n_deleted_file += 1
         else:
             exist_hashes.append(course_file["hash"])
@@ -552,15 +560,15 @@ def remove_duplicate_files(course_slug):
         "---%d duplicated files where deleted.---\n" % n_deleted_file)
 
 
-def remove_specific_files(course_slug, extension=".pdf"):
-    course_files = get_bucket_course_files(course_slug)
+def remove_specific_files(course_slug, extension=".pdf", bucket_name=QINIU_BUCKET_NAME):
+    course_files = get_bucket_course_files(course_slug, bucket_name)
     if not course_files:
         return
 
     n_deleted_file = 0
     for course_file in course_files:
         if course_file["key"].lower().endswith(extension.lower()):
-            bucket.delete(QINIU_BUCKET_NAME, course_file["key"])
+            bucket.delete(bucket_name, course_file["key"])
             n_deleted_file += 1
 
     sys.stdout.write(
@@ -579,7 +587,7 @@ def main():
 
         course_slug_list = [c.course_slug for c in courses]
         for course_slug in course_slug_list:
-            # remove_duplicate_files(course_slug)
+            # remove_duplicate_files(course_slug, QINIU_BUCKET_NAME)
             # remove_specific_files(course_slug)
             # remove_specific_files(course_slug, extension=".jpg")
             # remove_specific_files(course_slug, extension=".png")
