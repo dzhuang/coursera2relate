@@ -10,7 +10,8 @@ peewee
 django
 jinja2
 dropbox
-qiniu
+#qiniu
+git+https://github.com/jxltom/python-sdk@jxltom-patch-1
 git+https://github.com/dzhuang/coursera-dl.git@sqlite
 tqdm
 Pillow

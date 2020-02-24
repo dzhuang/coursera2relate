@@ -518,7 +518,11 @@ def _upload(course_slug, bucket_name, file_path):
     ret, _ = put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
 
     pbar.close()
-    return ret['key']
+    try:
+        return ret['key']
+    except (TypeError, KeyError):
+        # todo: check file uploaded, or else re-upload
+        return qiniu_file_path
 
 
 def upload_resource_to_qiniu(course_slug, file_path):
