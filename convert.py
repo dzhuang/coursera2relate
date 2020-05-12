@@ -552,7 +552,7 @@ def _upload(course_slug, bucket_name, file_path):
     # Check if the file exists / changed, if not, upload or update.
     if ret and "hash" in ret:
         if file_etag == ret["hash"]:
-            sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
+            sys.stdout.write("File with hash '%s' already exist.\n" % (file_etag[:10] + "...",))
             return qiniu_file_path
 
     # The file already exist, but it has another name, the we return the name.
@@ -561,15 +561,15 @@ def _upload(course_slug, bucket_name, file_path):
         if item['hash'] == file_etag:
             sys.stdout.write(
                 "File with hash '%s' already exist (with another name).\n"
-                % file_etag)
+                % (file_etag[:10] + "...",))
             return item['key']
 
     sys.stdout.write(
-        "File with hash '%s' changed, will be overwritten.\n" % file_etag)
+        "File with hash '%s' changed, will be overwritten.\n" % (file_etag[:10] + "...",))
 
     size = os.stat(file_path).st_size / 1024 / 1024
     sys.stdout.write(
-        "Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
+        "Uploading file with hash %s (size: %.1fM)\n" % ((file_etag[:10] + "...",), size))
     token = auth.upload_token(bucket_name, qiniu_file_path, 3600)
 
     cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
