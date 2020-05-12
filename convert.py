@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-import datetime
+from datetime import datetime
 import sys
 import jinja2
 import re
@@ -11,8 +11,9 @@ from coursera.models import (
 from django.conf.global_settings import LANGUAGES
 from coursera.utils import BeautifulSoup
 from bs4 import NavigableString
-from qiniu import Auth, put_file, etag, BucketManager
+from qiniu import Auth, put_file, etag, BucketManager, DomainManager
 import html
+from posixpath import join
 
 sys.stdout = sys.__stdout__
 sys.stderr = sys.__stderr__
@@ -27,17 +28,26 @@ upload_to_qiniu = False
 QINIU_ACCESS_KEY = os.environ.get("QINIU_ACCESS_KEY", "")
 QINIU_SECRET_KEY = os.environ.get("QINIU_SECRET_KEY", "")
 QINIU_BUCKET_NAME = os.environ.get("QINIU_BUCKET_NAME", "")
-QINIU_VIDEO_BUCKET_NAME = os.environ.get("QINIU_VIDEO_BUCKET_NAME", "")
+QINIU_VIDEO_BUCKET_PREFIX = os.environ.get("QINIU_VIDEO_BUCKET_PREFIX", "")
 IN_BUCKET_PREFIX = "coursera-videos"
 
-qiniu_auth = None
-bucket = None
+auth = None
+bm = None
 
 if (not sys.platform.startswith("win")
-        and QINIU_ACCESS_KEY and QINIU_SECRET_KEY and QINIU_BUCKET_NAME and QINIU_VIDEO_BUCKET_NAME):
+        and QINIU_ACCESS_KEY and QINIU_SECRET_KEY and QINIU_BUCKET_NAME and QINIU_VIDEO_BUCKET_PREFIX):
     upload_to_qiniu = True
-    qiniu_auth = Auth(QINIU_ACCESS_KEY, QINIU_SECRET_KEY)
-    bucket = BucketManager(qiniu_auth)
+    auth = Auth(QINIU_ACCESS_KEY, QINIU_SECRET_KEY)
+
+    def get_domain_manager():
+        return DomainManager(auth)
+
+    def get_bucket_manager():
+        return BucketManager(auth)
+
+    bm = BucketManager(auth)
+    dm = get_domain_manager()
+
 
 flow_template = u"""
 title: "{{ module_name }}"
@@ -144,6 +154,49 @@ chunks:
 """
 
 
+def get_source_bucket(domain_name, retries=10):
+    n = 0
+    ret = None
+    while n < retries:
+        try:
+            ret, info = dm.get_domain_info(domain_name)
+            assert info.status_code == 200
+            return ret["source"]["sourceQiniuBucket"]
+        except AssertionError:
+            n += 1
+    assert ret is not None
+
+
+def get_latest_bucket_name(retries=10, prefix=QINIU_VIDEO_BUCKET_PREFIX):
+    n = 0
+    ret = None
+    while n < retries:
+        try:
+            ret, resp = dm.get_domains(limit=1000)
+            assert resp.status_code == 200
+            break
+        except AssertionError:
+            n += 1
+    assert ret is not None
+    domains = ret["domains"]
+    latest_date = None
+    latest_bucket = None
+    for domain in domains:
+        current_bucket = get_source_bucket(domain["name"])
+        if latest_bucket is None and current_bucket.startswith(prefix):
+            latest_bucket = current_bucket
+        current_date = datetime.strptime(domain["createAt"].split(".")[0], '%Y-%m-%dT%H:%M:%S')
+        if latest_date is None:
+            latest_date = current_date
+        if current_date > latest_date and current_bucket.startswith(prefix):
+            latest_bucket = current_bucket
+
+    return latest_bucket
+
+
+qiniu_video_bucket_name = get_latest_bucket_name()
+
+
 class CourseraPage(object):
     def __init__(self, id, title, content):
         self.id = id.replace("-", "_")
@@ -219,10 +272,14 @@ def local_path_to_url(course_slug, local_path, ext=None):
         assert os.path.isfile(os.path.join(os.getcwd(), local_path))
         striped_local_path = upload_resource_to_qiniu(course_slug, local_path)
     assert not striped_local_path.startswith("/")
+
+    # Remove in_bucket_prefix from url
+    if striped_local_path.startswith(IN_BUCKET_PREFIX + "/"):
+        striped_local_path = striped_local_path[len(IN_BUCKET_PREFIX + "/"):]
     return striped_local_path
 
 
-def convert_video_page(database, item):
+def convert_video_page(item):
     with database:
         video_assets = ItemVideoAsset.select().join(Item).where(Item.item_id == item.item_id)
 
@@ -279,7 +336,7 @@ def avoid_colon_at_beginning(s):
     return s
 
 
-def convert_normal_page(database, item):
+def convert_normal_page(item):
     content = avoid_colon_at_beginning(item.content)
     soup = BeautifulSoup(content)
 
@@ -354,11 +411,11 @@ def generate_flow(module_slug, ordinal):
     pages = []
     for i, item in enumerate(items):
         if item.type_name == "lecture":
-            content = convert_video_page(database, item)
+            content = convert_video_page(item)
         else:
             if not item.content:
                 continue
-            content = convert_normal_page(database, item)
+            content = convert_normal_page(item)
 
         if content:
             pages.append(CourseraPage(id="%s_%s" % (item.slug, str(i+1)), title=item.name, content=content))
@@ -387,7 +444,7 @@ def generate_reference_flow(course_slug, references, ordinal):
     for i, item in enumerate(references):
         if not item.content:
             continue
-        content = convert_normal_page(database, item)
+        content = convert_normal_page(item)
 
         if content:
             pages.append(CourseraPage(id="%s_%s" % (item.slug, str(i+1)),
@@ -482,15 +539,15 @@ def tqdmWrapViewBar(*args, **kwargs):
 
 def get_bucket_course_files(course_slug, bucket_name):
     course_prefix = "%s/%s" % (IN_BUCKET_PREFIX, course_slug)
-    ret, _, _ = bucket.list(bucket=bucket_name, prefix=course_prefix)
+    ret, _, _ = bm.list(bucket=bucket_name, prefix=course_prefix)
     return ret['items']
 
 
 def _upload(course_slug, bucket_name, file_path):
-    qiniu_file_path = os.path.join(IN_BUCKET_PREFIX, file_path)
+    qiniu_file_path = join(IN_BUCKET_PREFIX, file_path, )
 
     file_etag = etag(file_path)
-    ret, _ = bucket.stat(bucket_name, qiniu_file_path)
+    ret, _ = bm.stat(bucket_name, qiniu_file_path)
 
     # Check if the file exists / changed, if not, upload or update.
     if ret and "hash" in ret:
@@ -498,6 +555,7 @@ def _upload(course_slug, bucket_name, file_path):
             sys.stdout.write("File with hash '%s' already exist.\n" % file_etag)
             return qiniu_file_path
 
+    # The file already exist, but it has another name, the we return the name.
     bucket_course_files = get_bucket_course_files(course_slug, bucket_name)
     for item in bucket_course_files:
         if item['hash'] == file_etag:
@@ -512,7 +570,7 @@ def _upload(course_slug, bucket_name, file_path):
     size = os.stat(file_path).st_size / 1024 / 1024
     sys.stdout.write(
         "Uploading file with hash %s (size: %.1fM)\n" % (file_etag, size))
-    token = qiniu_auth.upload_token(bucket_name, qiniu_file_path, 3600)
+    token = auth.upload_token(bucket_name, qiniu_file_path, 3600)
 
     cbk, pbar = tqdmWrapViewBar(ascii=True, unit='b', unit_scale=True)
     ret, _ = put_file(token, qiniu_file_path, file_path, progress_handler=cbk)
@@ -521,12 +579,12 @@ def _upload(course_slug, bucket_name, file_path):
     try:
         return ret['key']
     except (TypeError, KeyError):
-        # todo: check file uploaded, or else re-upload
-        return qiniu_file_path
+        # Retry upload
+        return _upload(course_slug, bucket_name, file_path)
 
 
 def upload_resource_to_qiniu(course_slug, file_path):
-    if not qiniu_auth or not upload_to_qiniu:
+    if not auth or not upload_to_qiniu:
         return
 
     _, ext = os.path.splitext(file_path)
@@ -544,7 +602,7 @@ def upload_resource_to_qiniu(course_slug, file_path):
             img.save(file_path)
 
     if file_path.lower().endswith("mp4"):
-        return _upload(course_slug, QINIU_VIDEO_BUCKET_NAME, file_path)
+        return _upload(course_slug, qiniu_video_bucket_name, file_path)
     else:
         return _upload(course_slug, QINIU_BUCKET_NAME, file_path)
 
@@ -555,7 +613,7 @@ def remove_duplicate_files(course_slug, bucket_name):
     n_deleted_file = 0
     for course_file in course_files:
         if course_file["hash"] in exist_hashes:
-            bucket.delete(bucket_name, course_file["key"])
+            bm.delete(bucket_name, course_file["key"])
             n_deleted_file += 1
         else:
             exist_hashes.append(course_file["hash"])
@@ -572,7 +630,7 @@ def remove_specific_files(course_slug, extension=".pdf", bucket_name=QINIU_BUCKE
     n_deleted_file = 0
     for course_file in course_files:
         if course_file["key"].lower().endswith(extension.lower()):
-            bucket.delete(bucket_name, course_file["key"])
+            bm.delete(bucket_name, course_file["key"])
             n_deleted_file += 1
 
     sys.stdout.write(
@@ -583,7 +641,7 @@ def main():
     if os.path.isfile(DB_PATH):
         with open(DB_PATH, 'rb') as f:
             data = f.read()
-            upload_to_dropbox("/course_%s.db" % datetime.datetime.now().strftime("%Y-%m-%d-%H-%M"), data)
+            upload_to_dropbox("/course_%s.db" % datetime.now().strftime("%Y-%m-%d-%H-%M"), data)
 
     try:
         with database:

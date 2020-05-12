@@ -11,7 +11,7 @@ django
 jinja2
 dropbox
 #qiniu
-git+https://github.com/jxltom/python-sdk@jxltom-patch-1
+git+https://gitee.com/dzhuang/qiniu_sdk
 git+https://github.com/dzhuang/coursera-dl.git@sqlite
 tqdm
 Pillow
